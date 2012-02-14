@@ -30,8 +30,9 @@ from math import pow,fabs,sqrt
 PrepareScene = False
 VisualPoints = None
 VVPoint = []
-VisualSegments = None
+VisualSegments = []
 control = None
+inputMode=False
 
 orien = {"CLOCKWISE":-1,"COLLINEAR":0,"COUNTERCLOCKWISE":1}
 rorien = {-1:"CLOCKWISE",0:"COLLINEAR",1:"COUNTERCLOCKWISE"}
@@ -41,6 +42,109 @@ CLOCKWISE = ON_NEGATIVE_SIDE = -1
 COUNTERCLOCKWISE = ON_POSITIVE_SIDE = 1
 COLLINEAR = ON_ORIENTED_BOUNDARY = 0
 EP = 15 #Extreme Point for creating lines and rays which does not have a particulary end
+cnd =None
+
+class clicknDrag:
+    """this class implements an abstract click and drag method, for the cgal visual class (mostly)"""
+    def __init__(self, objectLst=[], _3d = True, controlWins=[], doWhileDragged=None, doWhenDropped=None, doWhenNewPoint=None, createNewPoints=True, terminateCondition=None):
+        self.doWhenNewPoint = doWhenNewPoint
+        self.createNewPoints = createNewPoints
+        self.doWhileDragged=doWhileDragged
+        self.doWhenDropped=doWhenDropped
+        self.objectLst = objectLst
+        self.terminateCondition = terminateCondition
+        self._3d = _3d
+        self.controlWins = controlWins #any controls you want to check for interaction
+        if(_3d):
+            self.obj = 'VPoint_3(%x, %y, %z)'
+        else:
+            self.obj = 'Point_2(%x, %y)'
+    def retVPoint_d(self, x,y,z):
+        inst = self.obj.replace('%x', str(x)).replace('%y', str(y)).replace('%z', str(z))
+        return eval(inst)
+    def comparison(self, vec1, vec2):
+        if(self._3d):
+            return mag(vec1-vec2)
+        else:
+            return (mag( (vec1.x, vec1.y, 0) - (vec2.x, vec2.y, 0) ) )
+    def go(self):
+        tolerance = Decimal("0.000000001") #later fix this  according to screen range
+        picked = -1
+        inputMode = True
+        while inputMode:
+            for c in self.controlWins: # Check for mouse events and drive specified actions
+                if(c is not None):
+                    c.interact()
+            while(scene.mouse.events > 0 or scene.kb.keys):
+                if(self.terminateCondition is not None):
+                    if(self.terminateCondition()):
+                        inputMode = False
+                        scene.mouse.events = 0
+                        return self.objectLst
+                mevent = scene.mouse.getevent()
+                if(mevent.drag and mevent.button == "left"):#pick
+                    picked = -1
+                    for i in xrange(0,len(self.objectLst)):
+                        if(self.objectLst[i].reprObj() is mevent.pick):
+                            picked = i
+                            break
+                    if(picked >=0):
+                        #currentPnt = VPoint_3(self.objectLst[i].x(), self.objectLst[i].y(), self.objectLst[i].z())
+                        if(self._3d):
+                            currentPnt = self.retVPoint_d(self.objectLst[i].x(), self.objectLst[i].y(), self.objectLst[i].z())
+                            currentVc = vector(mevent.pos.x, mevent.pos.y, mevent.pos.z)
+                        else:
+                            currentPnt = self.retVPoint_d(self.objectLst[i].x(), self.objectLst[i].y(), 0)
+                            currentVc = vector(mevent.pos.x, mevent.pos.y, 0)                    
+                        self.objectLst[i].visual(False)
+                    while(picked >=0):
+                        #visual.scene.cursor.visible = 0 #not implemented?
+                        if(scene.mouse.events > 0 or scene.kb.keys):
+                            if(self.terminateCondition is not None):
+                                if(self.terminateCondition()):
+                                    inputMode = False
+                                    scene.mouse.events = 0
+                                    return self.objectLst
+                            mevent_2 = scene.mouse.getevent()
+                            if(mevent_2.button == "left" and (mevent_2.drop or mevent_2.release)):
+                                # visual.scene.cursor.visible = 1 #not implemented?
+                                self.objectLst[picked]=currentPnt
+                                print self.objectLst
+                                mevent = mevent_2
+                                picked = -2
+                                if(self.doWhenDropped is not None):
+                                    self.doWhenDropped() #consider eval
+                                break
+                        else:
+                            #print currentVc, visual.scene.mouse.pos
+                            if(Decimal(str(abs(currentVc - scene.mouse.pos))) > tolerance):
+                                currentPnt.visual(False)
+                                if(self._3d):
+                                    currentPnt = self.retVPoint_d(scene.mouse.pos.x, scene.mouse.pos.y, scene.mouse.pos.z)
+                                    currentVc = vector(scene.mouse.pos.x, scene.mouse.pos.y, scene.mouse.pos.z)
+                                else:
+                                    currentPnt = self.retVPoint_d(scene.mouse.pos.x, scene.mouse.pos.y, 0)
+                                    currentVc = vector(scene.mouse.pos.x, scene.mouse.pos.y, 0)
+                                self.objectLst[i]=currentPnt
+                                if(self.doWhileDragged is not None):
+                                    self.doWhileDragged()                                
+                if(self.createNewPoints and mevent.press and mevent.button == "left"):
+                    if(not mevent.pick):
+                        point = mevent.pos
+                        self.objectLst.append(self.retVPoint_d(point.x, point.y, point.z))
+                        if(self.doWhenNewPoint is not None):
+                            self.doWhenNewPoint()
+
+        scene.mouse.events = 0 #clear events
+        inputMode = False
+        return self.objectLst        
+
+def terminate():
+    if scene.kb.keys:
+        s = scene.kb.getkey()
+        if s == 'backspace':
+            return True
+        return False
 
 #Exception if someone tries to create an object with false input
 class No_Constructor(Exception):
@@ -134,11 +238,21 @@ class mouseClick(object):
     def __str__(self):
         return "%s button pressed at position %s" % (self.button, self.pos)
         
-def getVisualPoints():
+def getVisualPoints(obj=[]):
     global PrepareScene
     if (not PrepareScene):
         prepareScene()
-    points =[]
+    inputMode=True
+    if not obj:
+        points =[]
+    else:
+        points = obj
+    global cnd
+    cnd = clicknDrag(points,_3d = False,doWhenNewPoint=run, doWhenDropped=run,doWhileDragged=run,terminateCondition=terminate, controlWins = [])
+    k= cnd.go()
+    inputMode = False
+    return k    
+    """
     while True:
         if scene.kb.keys:
             s = scene.kb.getkey()
@@ -153,7 +267,7 @@ def getVisualPoints():
                 points.append(point)
 #    print VVPoint
     return points
-    
+    """
 def getPolygon():
     """
     Function for getting a polygon from the user.
@@ -264,25 +378,25 @@ def issame(x,y):
     
 def incone(i, j, P):
     n = len(P)
-    i1 = (i+1)%n					# i+1
-    in1 = (i+n-1)%n					# i-1
+    i1 = (i+1)%n                    # i+1
+    in1 = (i+n-1)%n                    # i-1
     cc = orien[orientation(P[in1], P[i], P[i1])]
-    if cc >= 0 :			# CCW or collinear
+    if cc >= 0 :            # CCW or collinear
         if orien[orientation(P[in1], P[i], P[j])] == 1 and orien[orientation(P[i], P[j], P[i1])] == -1:
             return True
-    else:						# CW
+    else:                        # CW
         if orien[orientation(P[in1], P[i], P[j])] == 1 or orien[orientation(P[i], P[i1], P[j])] ==1:
             return True
     return False
 
 def diagonalie(i, j, P):
-	n = len(P)
-	s = Segment_2(P[i], P[j],visible=False)
-	for k in range(n):				# intersection of two segments
-		p = intersection(s, Segment_2(P[k], P[(k+1)%n]))
-		if isinstance(p,Point_2) and p not in P:	# exlude Points i, j
-			return False
-	return True
+    n = len(P)
+    s = Segment_2(P[i], P[j],visible=False)
+    for k in xrange(n):                # intersection of two segments
+        p = intersection(s, Segment_2(P[k], P[(k+1)%n]))
+        if isinstance(p,Point_2) and p not in P:    # exlude Points i, j
+            return False
+    return True
     
 #########################################################################################
 class Point_2(object):#all clear
@@ -432,6 +546,8 @@ class Point_2(object):#all clear
         else:
             self._point.visible = visible
         return self._point.visible
+    def reprObj(self):
+        return self._point
 
 
 class Vector_2(object):
@@ -933,11 +1049,15 @@ class Segment_2(object):#all clear
         self._middle = None
         self._color = color
         global VisualSegments
+        """
         if VisualSegments is not None:
             VisualSegments[self]=self
         else:
             VisualSegments = {}
             VisualSegments[self]=self
+        """
+    def __del__(self):
+        self._segment.visible=false
     def __repr__(self):
         return 'Segment_2({self._point_start[0]},{self._point_start[1]}),({self._point_end[0]},{self._point_end[1]})' .format(self=self)    
     def color(self,x=0,y=0,z=0):
@@ -1538,12 +1658,19 @@ def intersection(a,b,c=True):
         return intersection(b,a,c)
                 
                 
-def run(Vpoints):
+def run(poi=[]):
       """
       Jarvis Convex Hull algorithm.
       points is a list of Point_2 points
-      
-      points = Vpoints.values()
+      """
+      global VisualSegments
+      VisualSegmentsOld = VisualSegments[:]
+      VisualSegments = []
+      if not poi:
+          global cnd
+          points = cnd.objectLst[:]
+      else:
+          points = poi[:]
       import random
       r0 = min(points)
       hull = [r0]
@@ -1553,8 +1680,8 @@ def run(Vpoints):
             u = random.choice(remainingPoints)
             for t in points:
                   if t != u and \
-                     (orientation(r,u,t) == CLOCKWISE or \
-                     (orientation(r,u,t) == COLLINEAR and \
+                     (orientation(r,u,t) == "CLOCKWISE" or \
+                     (orientation(r,u,t) == "COLLINEAR" and \
                      (u-r).direction() == (t-u).direction())):
                         u = t
             r = u
@@ -1564,10 +1691,13 @@ def run(Vpoints):
                 remainingPoints.remove(r)
       for t in xrange(len(hull)):
        if t != len(hull)-1:
-        Segment_2(hull[t],hull[t+1])
+        VisualSegments.append(Segment_2(hull[t],hull[t+1]))
        else:
-        Segment_2(hull[-1],hull[0])
-      return hull
+        VisualSegments.append(Segment_2(hull[-1],hull[0]))
+       for t in VisualSegmentsOld:
+           del t 
+        
+#      return hull
       """
       print Vpoints
       p = Polygon_2(Vpoints)
@@ -1576,7 +1706,7 @@ def run(Vpoints):
       print "The polygon is",
       if not t:
           print "not",
-      print "simple"
+      print "simple" """
       
 class Polygon_2(object):
     def __init__(self,points,segments=None,color=(1,1,1),visible=True):
@@ -1671,7 +1801,7 @@ class Polygon_2(object):
             conv.reverse()
         while len(conv) > 3:
            n = len(conv)
-           for i in range(n):
+           for i in xrange(n):
                i1 = (i+1)%n
                i2 = (i+2)%n
                if not incone(i, i2, conv) and diagonalie(i, i2, conv):
